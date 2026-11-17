@@ -103,22 +103,54 @@ Ejemplo de `/api/filters`:
 | `ALLOW_UPLOADS` | `true` | `false` = solo búsqueda (producción) |
 | `FRONTEND_PORT` / `BACKEND_PORT` | `3000` / `8000` | |
 
-## Llevar el banco a producción
+## Despliegue en VPS (producción de solo lectura)
 
-El banco se procesa una sola vez en local; producción solo sirve la búsqueda.
+El banco se procesa **una sola vez en local**. El VPS solo sirve la búsqueda.
 
-1. **Local:** espera a que el documento termine (o quede como quieras) y exporta:
-   ```bash
-   bash scripts/export.sh            # crea ./export/bancopreu.dump y ./export/storage.tar.gz
-   ```
-2. Copia el proyecto y la carpeta `export/` al servidor. Crea su `.env` (no hace falta clave de Gemini).
-3. **Servidor:**
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.prod.yml build
-   bash scripts/import.sh export     # restaura la BD y las imágenes, y arranca la app
-   ```
+**Qué garantiza `docker-compose.prod.yml`:**
 
-`docker-compose.prod.yml` pone `ALLOW_UPLOADS=false`: se oculta el botón de subir y la API responde 403 a subir, reprocesar o eliminar documentos. Además, el worker no arranca.
+| Riesgo | Protección |
+|---|---|
+| Modificar o borrar el banco | `ALLOW_UPLOADS=false`: la API responde **403** a subir, reprocesar o eliminar, y el botón de subir no aparece |
+| Usar tus API keys | El VPS no las necesita; el compose de producción las **vacía** aunque estén en `.env`, y el worker no arranca |
+| Descargar el PDF original | `EXPOSE_PDF=false`: el PDF **no se sube** al VPS, `/storage/pdfs/*` da 404 y la API no expone rutas internas |
+| Alterar las imágenes | El volumen se monta **solo lectura** en el backend; solo `import.sh` puede escribir en él |
+| Acceso directo a servicios | Solo **Caddy** (80/443) está expuesto. Backend, Postgres y Redis quedan en la red interna. `/docs` desactivado |
+| Tráfico sin cifrar | HTTPS automático con Let's Encrypt, HSTS y cabeceras de seguridad |
+
+### Pasos
+
+**1. DNS:** crea un registro **A** `isaacpreu` en `pulsarsrl.cloud` → IP del VPS.
+
+**2. VPS** (Ubuntu/Debian) — instalar Docker y abrir el firewall:
+```bash
+curl -fsSL https://get.docker.com | sh
+sudo ufw allow 22,80,443/tcp && sudo ufw allow 443/udp && sudo ufw enable
+```
+
+**3. Código** — sube el repo a GitHub/GitLab desde tu PC (`.env`, `export/` y `storage/` están en `.gitignore`) y clónalo en el VPS:
+```bash
+git clone <url-del-repo> ~/bancopreu && cd ~/bancopreu
+cp .env.production.example .env
+sed -i "s/CAMBIA_ESTA_CONTRASEÑA/$(openssl rand -hex 24)/" .env    # contraseña de Postgres
+```
+
+**4. Datos del banco** — en tu PC (Git Bash), exporta y sube:
+```bash
+bash scripts/export.sh                       # export/bancopreu.dump + export/storage.tar.gz (sin PDF)
+scp -r export usuario@IP-DEL-VPS:~/bancopreu/
+```
+
+**5. VPS** — construir, importar y arrancar:
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml build
+bash scripts/import.sh export
+```
+Abre **https://isaacpreu.pulsarsrl.cloud**. El certificado HTTPS se genera solo la primera vez.
+
+**Actualizar** después de cambiar código: `git pull` y luego `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build`.
+**Actualizar el banco:** reprocesa en local, vuelve a hacer `export.sh` + `scp` y ejecuta `import.sh` en el VPS.
+Si en algún caso quieres publicar el PDF: `export.sh --con-pdf` y `EXPOSE_PDF=true`.
 
 > **Cuotas gratuitas:** OpenRouter permite 50 solicitudes al día con modelos `:free` (1000 al día si la cuenta tiene al menos 10 USD de crédito). Gemini: 5 solicitudes/min y unas 20/día por modelo y proyecto. Cada página es una solicitud. Varias claves de un mismo proyecto comparten cuota. Usar varios proyectos para superar los límites gratuitos va contra las condiciones de Google y puede suponer la suspensión de las claves. Activar la facturación cuesta menos de 1 USD por un PDF de unas 200 páginas.
 
@@ -169,5 +201,7 @@ frontend/
   server/middleware/     Proxy /api y /storage → backend
 scripts/
   export.sh / import.sh  Migrar BD + imágenes a producción
-docker-compose.prod.yml  Modo solo lectura
+docker-compose.prod.yml  Producción: solo lectura, sin claves, sin PDF, Caddy + HTTPS
+Caddyfile                Proxy HTTPS del VPS
+.env.production.example  .env del VPS (sin claves de IA)
 ```
