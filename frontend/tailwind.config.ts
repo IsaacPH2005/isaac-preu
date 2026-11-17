@@ -26,6 +26,15 @@ export default {
           soft: '#4a4843',
           muted: '#8a867c',
         },
+        // Mostaza de pollería: solo para la página de donaciones
+        mustard: {
+          50: '#fdf6e3',
+          100: '#f9e9bd',
+          300: '#eec463',
+          500: '#d99a1e',
+          700: '#8f6110',
+        },
+        receipt: '#fffdf7',
         accent: {
           50: '#eef6f3',
           100: '#d5ebe3',

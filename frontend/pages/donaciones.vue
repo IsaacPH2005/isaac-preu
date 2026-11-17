@@ -3,7 +3,6 @@ const { push } = useToast()
 
 // ─── Datos de la donación ──────────────────────────────────────────
 const WA_NUMBER = '59168597440'
-const WA_DISPLAY = '+591 685 97440'
 const ACCOUNT = '40022425120'
 const HOLDER = 'ISAAC PARISACA HUALLPA'
 const BANK = 'BancoFie'
@@ -12,70 +11,131 @@ const QR_RECEIPT = '/qr/bancofie-comprobante.jpeg'
 const MEME_IMAGE = '/memes/meme-gracias.jpg'
 // El comprobante de BancoFie indica «válido hasta 18/11/2026».
 const QR_VALID_UNTIL = new Date('2026-11-18T23:59:59-04:00')
-const qrExpired = computed(() => Date.now() > QR_VALID_UNTIL.getTime())
+const QR_VALID_LABEL = '18/11/2026'
+const qrExpired = ref(false)
 
 const waLink = (message: string) => `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(message)}`
-const waGeneral = waLink('Hola Isaac 👋 Vi la página de donaciones de BancoPreu y tengo una duda.')
-const waWork = waLink(
-  'Hola Isaac 👋 Vi BancoPreu y quiero hablar contigo por una recomendación / para trabajar juntos.',
-)
 const waMeme = waLink('Hola Isaac 👋 Te mando un meme para el Fondo Oficial de Memes de BancoPreu:')
-const waHelp = waLink('Hola Isaac 👋 No pude escanear el QR de donaciones de BancoPreu, ¿me ayudas?')
+const waHelp = waLink('Hola Isaac 👋 No pude pagar con el QR de donaciones de BancoPreu, ¿me ayudas?')
 
+// ─── Menú ──────────────────────────────────────────────────────────
+interface Item {
+  amount: number
+  icon: string
+  name: string
+  note: string
+}
+
+const menu: Item[] = [
+  { amount: 10, icon: '☕', name: 'Api con té', note: 'Una hora más de código' },
+  { amount: 25, icon: '🍗', name: 'Medio pollo', note: 'La unidad oficial de motivación' },
+  { amount: 50, icon: '🍟', name: 'Pollo con papas', note: 'Combustible para una semana de bugs' },
+  { amount: 100, icon: '😂', name: 'Pollo + meme', note: 'Incluye un meme dedicado' },
+]
+
+const selected = ref<Item | null>(menu[1])
+const custom = ref('')
+
+const customAmount = computed(() => {
+  const n = Number(custom.value.replace(',', '.'))
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null
+})
+const amount = computed(() => customAmount.value ?? selected.value?.amount ?? null)
+const lineName = computed(() => (customAmount.value ? 'Aporte libre' : selected.value?.name ?? 'Aporte libre'))
+const lineIcon = computed(() => (customAmount.value ? '💛' : selected.value?.icon ?? '💛'))
+
+function choose(item: Item) {
+  selected.value = item
+  custom.value = ''
+}
+
+function onCustomInput() {
+  if (custom.value) selected.value = null
+}
+
+const fmt = (n: number) => `Bs. ${Number.isInteger(n) ? n : n.toFixed(2)}`
+
+const waPaid = computed(() =>
+  waLink(
+    amount.value
+      ? `Hola Isaac 👋 Te acabo de invitar ${lineName.value.toLowerCase()} (${fmt(amount.value)}) desde BancoPreu. Te mando el comprobante:`
+      : 'Hola Isaac 👋 Te acabo de hacer una donación desde BancoPreu. Te mando el comprobante:',
+  ),
+)
+
+// ─── Acciones del ticket ───────────────────────────────────────────
 const copied = ref('')
 let copiedTimer: ReturnType<typeof setTimeout> | null = null
-
-onBeforeUnmount(() => {
-  if (copiedTimer) clearTimeout(copiedTimer)
-})
 
 async function copyField(value: string, key: string, label: string) {
   const ok = await copyToClipboard(value)
   if (!ok) {
-    push('No se pudo copiar. Intenta seleccionarlo a mano.', 'error')
+    push('No se pudo copiar. Selecciónalo y cópialo a mano.', 'error')
     return
   }
   copied.value = key
-  push(`${label} copiado ✨`, 'success')
+  push(`${label} copiado`, 'success')
   if (copiedTimer) clearTimeout(copiedTimer)
   copiedTimer = setTimeout(() => (copied.value = ''), 1800)
 }
 
-// ─── Niveles de hambre ─────────────────────────────────────────────
-interface Tier {
-  amount: number
-  icon: string
-  title: string
-  blurb: string
-}
+// En el celular no se puede escanear la propia pantalla: lo útil es guardar el QR
+// y abrirlo desde la app del banco («Pagar con QR» → «Subir imagen»).
+const isTouch = ref(false)
 
-const tiers: Tier[] = [
-  { amount: 10, icon: '☕', title: 'Un api con té', blurb: 'Una hora de concentración. O de mirar la pantalla, según el día.' },
-  { amount: 25, icon: '🍗', title: 'Medio pollo', blurb: 'La unidad oficial de motivación de este proyecto.' },
-  { amount: 50, icon: '🍟', title: 'Pollo + papas', blurb: 'Modo dios del desarrollador: activado.' },
-  { amount: 100, icon: '😂', title: 'Pollo + meme', blurb: 'Financias el próximo meme de calidad dudosa.' },
-]
-
-const selectedAmount = ref<number | null>(null)
-
-async function pickAmount(tier: Tier) {
-  selectedAmount.value = tier.amount
-  const ok = await copyToClipboard(String(tier.amount))
-  if (ok) push(`Bs. ${tier.amount} copiado. Pégalo en tu app del banco.`, 'success')
-  else push(`Escribe Bs. ${tier.amount} en tu app del banco.`, 'info')
-
-  if (window.innerWidth < 1024) {
-    document.getElementById('qr-panel')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+async function saveQr() {
+  try {
+    const blob = await (await fetch(QR_IMAGE)).blob()
+    const file = new File([blob], 'qr-donacion-bancopreu.png', { type: blob.type || 'image/png' })
+    if (navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ files: [file], title: 'QR de donación BancoPreu' })
+      return
+    }
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = file.name
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 2000)
+    push('QR guardado. Ábrelo desde la app de tu banco.', 'success')
+  } catch (e: any) {
+    if (e?.name !== 'AbortError') push('No se pudo guardar. Mantén presionado el QR para guardarlo.', 'error')
   }
 }
 
+// Barra de pago fija en móvil: visible mientras el ticket no está en pantalla.
+const ticketVisible = ref(true)
+let observer: IntersectionObserver | null = null
+
+function goToTicket() {
+  document.getElementById('ticket')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+onMounted(() => {
+  qrExpired.value = Date.now() > QR_VALID_UNTIL.getTime()
+  isTouch.value = window.matchMedia('(pointer: coarse)').matches
+  const ticket = document.getElementById('ticket')
+  if (ticket && 'IntersectionObserver' in window) {
+    // Oculta la barra si el ticket está en pantalla o ya quedó arriba (no tapar el footer).
+    observer = new IntersectionObserver(([entry]) => {
+      ticketVisible.value = entry.isIntersecting || entry.boundingClientRect.top < 0
+    }, {
+      rootMargin: '0px 0px -30% 0px',
+    })
+    observer.observe(ticket)
+  }
+})
+onBeforeUnmount(() => {
+  if (copiedTimer) clearTimeout(copiedTimer)
+  observer?.disconnect()
+})
+
 useHead({
-  title: 'Donaciones — BancoPreu',
+  title: 'Invítame un pollo — BancoPreu',
   meta: [
     {
       name: 'description',
-      content:
-        'Invítame un pollo y financia el Fondo Oficial de Memes de BancoPreu. Donaciones por QR de BancoFie.',
+      content: 'BancoPreu es gratis y sin anuncios. Si te sirvió, invítale un pollo al dev con QR de BancoFie.',
     },
     { property: 'og:title', content: 'Invítame un pollo — BancoPreu' },
     {
@@ -87,470 +147,349 @@ useHead({
 </script>
 
 <template>
-  <div class="relative min-h-screen overflow-hidden">
-    <!-- Fondos decorativos -->
-    <div
-      class="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[540px] bg-[radial-gradient(50rem_30rem_at_78%_-8%,rgba(47,138,111,0.14),transparent),radial-gradient(38rem_26rem_at_8%_6%,rgba(232,176,75,0.16),transparent)]"
-    />
-
+  <div class="min-h-screen">
     <header class="sticky top-0 z-30 border-b border-ink/[0.07] bg-paper/85 backdrop-blur">
-      <div class="mx-auto flex h-16 max-w-[1180px] items-center gap-3 px-4 sm:px-6">
+      <div class="mx-auto flex h-16 max-w-[1120px] items-center gap-3 px-4 sm:px-6">
         <NuxtLink to="/" class="flex items-baseline gap-2">
           <span class="font-serif text-[28px] italic leading-none tracking-tight text-ink">BancoPreu</span>
           <span class="hidden text-xs text-ink-muted sm:inline">banco de preguntas</span>
         </NuxtLink>
-
-        <nav class="ml-auto flex items-center gap-1.5">
-          <NuxtLink to="/" class="btn-ghost px-2 sm:hidden" aria-label="Volver al banco de preguntas">
-            <AppIcon name="chevronLeft" :size="17" />
-          </NuxtLink>
-          <NuxtLink to="/" class="btn-ghost hidden px-2.5 sm:inline-flex">
-            <AppIcon name="chevronLeft" :size="15" />
-            Volver al banco
-          </NuxtLink>
-          <a :href="waGeneral" target="_blank" rel="noopener" class="btn-primary py-1.5 text-[13px]">
-            <AppIcon name="message" :size="15" />
-            WhatsApp
-          </a>
-        </nav>
+        <NuxtLink to="/" class="btn-ghost ml-auto px-2.5">
+          <AppIcon name="chevronLeft" :size="15" />
+          <span class="hidden sm:inline">Volver a las preguntas</span>
+          <span class="sm:hidden">Volver</span>
+        </NuxtLink>
       </div>
     </header>
 
-    <main class="mx-auto max-w-[1180px] px-4 pb-4 pt-10 sm:px-6 sm:pt-14">
-      <!-- ─── Héroe + QR ─────────────────────────────────────────── -->
-      <section class="grid items-start gap-10 lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-12">
+    <main class="mx-auto max-w-[1120px] px-4 pb-6 pt-10 sm:px-6 sm:pt-14">
+      <div class="grid items-start gap-12 lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-16">
+        <!-- ─── Izquierda: presentación + menú ─────────────────────── -->
         <div>
-          <span class="pill bg-white text-ink-soft ring-1 ring-ink/10">
-            <AppIcon name="heart" :size="12" class="text-rose-500" />
-            Donaciones · sin culpa
-          </span>
-
-          <h1 class="mt-4 font-serif text-[clamp(2.9rem,7vw,4.6rem)] italic leading-[0.95] tracking-tight text-ink">
-            Invítame
-            <span class="relative inline-block">
-              un pollo
-              <svg
-                class="absolute -bottom-1 left-0 h-3 w-full text-amber-400"
-                viewBox="0 0 200 12"
-                preserveAspectRatio="none"
-                aria-hidden="true"
-              >
-                <path d="M2 8C40 3 150 2 198 7" stroke="currentColor" stroke-width="5" stroke-linecap="round" fill="none" />
-              </svg>
-            </span>
-            .
+          <h1 class="font-serif text-[clamp(3rem,8vw,5.25rem)] italic leading-[0.92] tracking-tight text-ink">
+            Invítame<br />un pollo.
           </h1>
-
-          <p class="mt-5 max-w-xl text-[15px] leading-relaxed text-ink-soft sm:text-base">
-            BancoPreu es gratis, sin anuncios y sin plan premium. Si te ayudó a estudiar (o a aprobar),
-            esta es tu oportunidad de devolver el favor: <strong class="font-semibold text-ink">un pollo para el dev</strong>
-            y un meme para la comunidad.
+          <p class="mt-6 max-w-[34rem] text-[16px] leading-relaxed text-ink-soft">
+            BancoPreu es gratis, sin anuncios y sin cuentas. Si te ayudó a estudiar, puedes devolver el favor con
+            lo que quieras: el aporte paga el servidor, las APIs que leen los PDF y, claro, el pollo.
           </p>
 
-          <div class="mt-5 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-muted">
-            <span class="pill bg-white ring-1 ring-ink/10">Sin suscripciones</span>
-            <span class="pill bg-white ring-1 ring-ink/10">Sin anuncios</span>
-            <span class="pill bg-white ring-1 ring-ink/10">Sin letra chica</span>
-          </div>
+          <!-- Paso 1: menú -->
+          <section class="mt-12" aria-labelledby="menu-title">
+            <h2 id="menu-title" class="flex items-baseline gap-3">
+              <span class="step-num">1</span>
+              <span class="font-serif text-[28px] italic leading-none">Elige del menú</span>
+            </h2>
 
-          <div class="mt-7 flex flex-wrap gap-2">
-            <a href="#qr-panel" class="btn-primary">
-              <AppIcon name="heart" :size="16" />
-              Donar con QR
-            </a>
-            <a :href="waGeneral" target="_blank" rel="noopener" class="btn-outline">
-              <AppIcon name="message" :size="16" />
-              Hablar con Isaac
-            </a>
-          </div>
-
-          <!-- Causas -->
-          <div class="mt-9 grid gap-3 sm:grid-cols-2">
-            <article
-              class="rounded-2xl border border-ink/[0.08] bg-white p-4 shadow-card transition hover:-translate-y-0.5 hover:shadow-lift"
-            >
-              <div class="flex items-center gap-3">
-                <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-xl ring-1 ring-amber-200/70">
-                  🍗
-                </span>
-                <div>
-                  <p class="text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-muted">Causa oficial #1</p>
-                  <h2 class="font-serif text-xl italic leading-tight">El fondo del pollo</h2>
-                </div>
-              </div>
-              <p class="mt-3 text-[13px] leading-relaxed text-ink-soft">
-                El pollo no es un lujo: es el combustible oficial del proyecto. Café, horas de código y una que
-                otra crisis existencial resuelta.
-              </p>
-            </article>
-
-            <article
-              class="rounded-2xl border border-ink/[0.08] bg-white p-4 shadow-card transition hover:-translate-y-0.5 hover:shadow-lift"
-            >
-              <div class="flex items-center gap-3">
-                <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-accent-50 text-xl ring-1 ring-accent-200/70">
-                  😂
-                </span>
-                <div>
-                  <p class="text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-muted">Causa oficial #2</p>
-                  <h2 class="font-serif text-xl italic leading-tight">El fondo de memes</h2>
-                </div>
-              </div>
-              <p class="mt-3 text-[13px] leading-relaxed text-ink-soft">
-                Una causa seria: cada aporte financia memes de calidad dudosa y mantiene el humor en producción.
-              </p>
-              <a
-                :href="waMeme"
-                target="_blank"
-                rel="noopener"
-                class="mt-2 inline-flex items-center gap-1 text-[12px] font-medium text-accent-700 hover:text-accent-600"
+            <div class="mt-5 rounded-2xl border border-ink/10 bg-white/70 p-2 sm:p-3" role="radiogroup" aria-labelledby="menu-title">
+              <button
+                v-for="item in menu"
+                :key="item.amount"
+                type="button"
+                role="radio"
+                :aria-checked="selected?.amount === item.amount && !customAmount"
+                class="menu-row group"
+                :class="selected?.amount === item.amount && !customAmount ? 'is-active' : ''"
+                @click="choose(item)"
               >
-                Mandar mi meme
-                <AppIcon name="external" :size="12" />
-              </a>
-            </article>
-          </div>
+                <span class="text-2xl leading-none" aria-hidden="true">{{ item.icon }}</span>
+                <span class="min-w-0">
+                  <span class="block text-[15px] font-semibold text-ink">{{ item.name }}</span>
+                  <span class="block text-[13px] text-ink-muted">{{ item.note }}</span>
+                </span>
+                <span class="menu-leader" aria-hidden="true" />
+                <span class="font-serif text-2xl italic leading-none text-ink">Bs.&nbsp;{{ item.amount }}</span>
+              </button>
 
-          <dl class="mt-8 grid grid-cols-3 gap-4 border-t border-ink/10 pt-5">
-            <div>
-              <dt class="text-[11px] uppercase tracking-wider text-ink-muted">Anuncios</dt>
-              <dd class="mt-1 font-serif text-2xl italic leading-none">Cero</dd>
+              <label
+                class="menu-row cursor-text"
+                :class="customAmount ? 'is-active' : ''"
+              >
+                <span class="text-2xl leading-none" aria-hidden="true">💛</span>
+                <span class="min-w-0">
+                  <span class="block text-[15px] font-semibold text-ink">Otro monto</span>
+                  <span class="block text-[13px] text-ink-muted">Hasta Bs. 1 se agradece</span>
+                </span>
+                <span class="menu-leader" aria-hidden="true" />
+                <span class="flex items-baseline gap-1 font-serif text-2xl italic leading-none text-ink">
+                  Bs.
+                  <input
+                    v-model="custom"
+                    inputmode="decimal"
+                    placeholder="—"
+                    aria-label="Otro monto en bolivianos"
+                    class="w-16 border-b border-dashed border-ink/30 bg-transparent text-right font-serif text-2xl italic text-ink placeholder:text-ink-muted focus:border-accent-600 focus:outline-none"
+                    @input="onCustomInput"
+                  />
+                </span>
+              </label>
             </div>
-            <div>
-              <dt class="text-[11px] uppercase tracking-wider text-ink-muted">Precio</dt>
-              <dd class="mt-1 font-serif text-2xl italic leading-none">Bs. 0</dd>
-            </div>
-            <div>
-              <dt class="text-[11px] uppercase tracking-wider text-ink-muted">Meta actual</dt>
-              <dd class="mt-1 font-serif text-2xl italic leading-none">1 pollo</dd>
-            </div>
-          </dl>
+          </section>
+
+          <!-- En qué se va -->
+          <p class="mt-6 max-w-[36rem] text-[14px] leading-relaxed text-ink-muted">
+            <strong class="font-semibold text-ink-soft">¿En qué se va?</strong>
+            Hosting y base de datos, las APIs de IA que extraen las preguntas, subir bancos nuevos y mantener todo
+            gratis. Lo que sobre, en pollo y memes.
+          </p>
         </div>
 
-        <!-- Panel QR -->
-        <div id="qr-panel" class="scroll-mt-24 lg:sticky lg:top-24">
-          <div class="relative overflow-hidden rounded-2xl border border-ink/10 bg-white shadow-lift">
-            <div class="pointer-events-none absolute inset-0 bg-gradient-to-b from-accent-50/70 via-white to-white" />
-
-            <div class="relative p-5 sm:p-6">
-              <div class="flex items-center justify-between gap-3">
-                <span class="pill bg-accent-600 text-white">
-                  <AppIcon name="bank" :size="13" />
-                  Donación por QR
-                </span>
-                <span class="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-muted">{{ BANK }}</span>
+        <!-- ─── Derecha: ticket ──────────────────────────────────── -->
+        <aside id="ticket" class="scroll-mt-24 lg:sticky lg:top-24" aria-label="Tu pedido">
+          <div class="ticket">
+            <div class="ticket-edge" aria-hidden="true" />
+            <div class="ticket-body">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <p class="font-serif text-[26px] italic leading-none text-ink">Pollería BancoPreu</p>
+                  <p class="mt-1.5 font-mono text-[11px] text-ink-muted">Pedido para Isaac, el dev</p>
+                </div>
+                <span class="stamp" aria-hidden="true">Gracias</span>
               </div>
 
-              <div class="mx-auto mt-5 w-full max-w-[300px] rounded-2xl bg-white p-3 shadow-card ring-1 ring-ink/10">
+              <div class="ticket-rule" />
+
+              <div class="flex items-baseline justify-between gap-3 font-mono text-[13px] text-ink">
+                <span>1 × {{ lineIcon }} {{ lineName }}</span>
+                <span>{{ amount ? fmt(amount) : 'a elegir' }}</span>
+              </div>
+              <div class="mt-2 flex items-baseline justify-between gap-3">
+                <span class="font-mono text-[13px] font-semibold text-ink">Total</span>
+                <span class="font-serif text-[34px] italic leading-none text-ink" aria-live="polite">
+                  {{ amount ? fmt(amount) : 'Bs. —' }}
+                </span>
+              </div>
+
+              <div class="ticket-rule" />
+
+              <!-- Paso 2: pagar -->
+              <h2 class="flex items-baseline gap-3">
+                <span class="step-num">2</span>
+                <span class="text-[15px] font-semibold text-ink">
+                  {{ isTouch ? 'Guarda el QR y págalo desde tu banco' : 'Escanea con la app de tu banco' }}
+                </span>
+              </h2>
+              <p class="mt-1.5 pl-9 text-[13px] leading-relaxed text-ink-muted">
+                El QR tiene monto libre: escribe
+                <strong class="font-semibold text-ink-soft">{{ amount ? fmt(amount) : 'tu aporte' }}</strong>
+                al pagar.
+                <template v-if="isTouch">En tu app: «Pagar con QR» → «Subir imagen».</template>
+              </p>
+
+              <div class="relative mx-auto mt-4 w-full max-w-[248px]">
                 <img
                   :src="QR_IMAGE"
-                  alt="Código QR de BancoFie para donar a Isaac Parisaca Huallpa"
-                  class="w-full rounded-lg"
+                  :alt="`Código QR de ${BANK} para donar a ${HOLDER}`"
+                  class="w-full rounded-md bg-white p-2 ring-1 ring-ink/10"
+                  :class="qrExpired ? 'opacity-20 blur-[2px]' : ''"
                   width="578"
                   height="578"
                   decoding="async"
                 />
-              </div>
-
-              <p class="mt-4 text-center text-sm text-ink-soft">
-                Escanea desde la app de tu banco y escribe el monto que nazca.
-              </p>
-
-              <div class="mt-4 divide-y divide-ink/[0.06] overflow-hidden rounded-xl bg-paper/80 ring-1 ring-ink/[0.06]">
-                <button
-                  class="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition hover:bg-white"
-                  @click="copyField(HOLDER, 'holder', 'Titular')"
+                <div
+                  v-if="qrExpired"
+                  class="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center"
                 >
-                  <span class="min-w-0">
-                    <span class="block text-[10px] uppercase tracking-wider text-ink-muted">Titular</span>
-                    <span class="block truncate text-[12px] font-medium text-ink">{{ HOLDER }}</span>
-                  </span>
-                  <AppIcon
-                    :name="copied === 'holder' ? 'check' : 'copy'"
-                    :size="15"
-                    class="shrink-0"
-                    :class="copied === 'holder' ? 'text-accent-600' : 'text-ink-muted'"
-                  />
-                </button>
-
-                <button
-                  class="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition hover:bg-white"
-                  @click="copyField(ACCOUNT, 'account', 'Número de cuenta')"
-                >
-                  <span class="min-w-0">
-                    <span class="block text-[10px] uppercase tracking-wider text-ink-muted">Cuenta destino</span>
-                    <span class="block font-mono text-[13px] font-medium tracking-wide text-ink">{{ ACCOUNT }}</span>
-                  </span>
-                  <AppIcon
-                    :name="copied === 'account' ? 'check' : 'copy'"
-                    :size="15"
-                    class="shrink-0"
-                    :class="copied === 'account' ? 'text-accent-600' : 'text-ink-muted'"
-                  />
-                </button>
-
-                <div class="flex items-center justify-between gap-3 px-3 py-2.5">
-                  <span>
-                    <span class="block text-[10px] uppercase tracking-wider text-ink-muted">Monto</span>
-                    <span class="block text-[12px] font-medium text-ink">Tú eliges 🍗</span>
-                  </span>
-                  <AppIcon name="sparkles" :size="15" class="shrink-0 text-ink-muted" />
+                  <p class="text-[14px] font-semibold text-ink">Este QR venció el {{ QR_VALID_LABEL }}</p>
+                  <p class="text-[12px] leading-snug text-ink-soft">Transfiere al número de cuenta o pídeme uno nuevo.</p>
+                  <a :href="waHelp" target="_blank" rel="noopener" class="btn-primary mt-1 py-1.5 text-[13px]">
+                    <AppIcon name="message" :size="14" />
+                    Pedir QR nuevo
+                  </a>
                 </div>
               </div>
 
-              <button class="btn-primary mt-3 w-full" @click="copyField(ACCOUNT, 'account', 'Número de cuenta')">
-                <AppIcon :name="copied === 'account' ? 'check' : 'copy'" :size="15" />
-                {{ copied === 'account' ? 'Cuenta copiada' : 'Copiar número de cuenta' }}
-              </button>
+              <div class="mt-4 grid gap-2">
+                <button v-if="!qrExpired" type="button" :class="isTouch ? 'btn-primary' : 'btn-outline'" @click="saveQr">
+                  <AppIcon name="download" :size="15" />
+                  {{ isTouch ? 'Guardar QR en el celular' : 'Descargar QR' }}
+                </button>
+              </div>
 
-              <a :href="QR_IMAGE" download="qr-donacion-bancofie-isaac.png" class="btn-ghost mt-1.5 w-full py-1.5 text-xs">
-                <AppIcon name="download" :size="14" />
-                Descargar el QR
+              <dl class="mt-4 space-y-1 font-mono text-[12.5px]">
+                <div class="ticket-field">
+                  <dt class="text-ink-muted">Banco</dt>
+                  <dd class="text-ink">{{ BANK }}</dd>
+                </div>
+                <div class="ticket-field">
+                  <dt class="text-ink-muted">Titular</dt>
+                  <dd class="flex items-center gap-1 text-right text-ink">
+                    <span class="truncate">{{ HOLDER }}</span>
+                    <button
+                      type="button"
+                      class="copy-btn"
+                      :aria-label="copied === 'holder' ? 'Titular copiado' : 'Copiar titular'"
+                      @click="copyField(HOLDER, 'holder', 'Titular')"
+                    >
+                      <AppIcon :name="copied === 'holder' ? 'check' : 'copy'" :size="14" />
+                    </button>
+                  </dd>
+                </div>
+                <div class="ticket-field">
+                  <dt class="text-ink-muted">Cuenta</dt>
+                  <dd class="flex items-center gap-1 text-ink">
+                    <span class="font-semibold tracking-wide">{{ ACCOUNT }}</span>
+                    <button
+                      type="button"
+                      class="copy-btn"
+                      :aria-label="copied === 'account' ? 'Cuenta copiada' : 'Copiar número de cuenta'"
+                      @click="copyField(ACCOUNT, 'account', 'Número de cuenta')"
+                    >
+                      <AppIcon :name="copied === 'account' ? 'check' : 'copy'" :size="14" />
+                    </button>
+                  </dd>
+                </div>
+              </dl>
+
+              <div class="ticket-rule" />
+
+              <!-- Paso 3: avisar -->
+              <h2 class="flex items-baseline gap-3">
+                <span class="step-num">3</span>
+                <span class="text-[15px] font-semibold text-ink">¿Ya pagaste? Avísame</span>
+              </h2>
+              <a :href="waPaid" target="_blank" rel="noopener" class="btn-primary mt-3 w-full">
+                <AppIcon name="message" :size="16" />
+                Enviar comprobante por WhatsApp
               </a>
 
-              <p class="mt-3 text-center text-[11px] leading-relaxed text-ink-muted">
-                El QR no muerde. Hasta Bs. 1 cuenta (y se agradece con un meme).
+              <p v-if="!qrExpired" class="mt-4 text-center font-mono text-[11px] text-ink-muted">
+                QR válido hasta el {{ QR_VALID_LABEL }}
               </p>
-              <p class="mt-1 text-center text-[10px] text-ink-muted">
-                <template v-if="qrExpired">
-                  ⚠️ Este QR ya venció.
-                  <a :href="waHelp" target="_blank" rel="noopener" class="font-medium text-accent-700 underline-offset-2 hover:underline">
-                    Pídeme uno nuevo
-                  </a>
-                </template>
-                <template v-else>
-                  QR vigente hasta el 18/11/2026 ·
-                  <a :href="waHelp" target="_blank" rel="noopener" class="font-medium text-accent-700 underline-offset-2 hover:underline">
-                    ¿Venció? Pídeme otro
-                  </a>
-                </template>
+              <p class="mt-1.5 flex flex-wrap justify-center gap-x-4 gap-y-1 text-[12px]">
+                <a :href="waHelp" target="_blank" rel="noopener" class="font-medium text-accent-700 hover:underline">
+                  ¿Problemas para pagar?
+                </a>
+                <a :href="QR_RECEIPT" target="_blank" rel="noopener" class="font-medium text-ink-soft hover:underline">
+                  Ver QR original del banco
+                </a>
               </p>
-              <div class="mt-1.5 flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 text-[11px]">
-                <a
-                  :href="QR_RECEIPT"
-                  target="_blank"
-                  rel="noopener"
-                  class="inline-flex items-center gap-1 font-medium text-ink-soft underline-offset-2 hover:text-ink hover:underline"
-                >
-                  <AppIcon name="external" :size="11" />
-                  Ver comprobante del banco
-                </a>
-                <span class="text-ink/20" aria-hidden="true">·</span>
-                <a
-                  :href="waHelp"
-                  target="_blank"
-                  rel="noopener"
-                  class="font-medium text-accent-700 underline-offset-2 hover:underline"
-                >
-                  ¿No funciona el QR?
-                </a>
-              </div>
             </div>
+            <div class="ticket-edge ticket-edge--bottom" aria-hidden="true" />
           </div>
-        </div>
-      </section>
+        </aside>
+      </div>
 
-      <!-- ─── Niveles de hambre ───────────────────────────────────── -->
-      <section class="mt-16 sm:mt-20">
-        <div class="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <p class="panel-title">Elige tu nivel de hambre</p>
-            <h2 class="font-serif text-3xl italic leading-tight sm:text-4xl">¿Qué tan agradecido estás?</h2>
-          </div>
-          <p class="max-w-sm text-sm leading-relaxed text-ink-soft">
-            Toca una tarjeta y te copio el monto. Luego lo pegas en tu app del banco y listo.
-          </p>
-        </div>
-
-        <div class="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <button
-            v-for="tier in tiers"
-            :key="tier.amount"
-            type="button"
-            class="group rounded-2xl border bg-white p-5 text-left shadow-card transition hover:-translate-y-0.5 hover:shadow-lift"
-            :class="
-              selectedAmount === tier.amount
-                ? 'border-accent-500 ring-2 ring-accent-500/20'
-                : 'border-ink/[0.08] hover:border-ink/15'
-            "
-            @click="pickAmount(tier)"
-          >
-            <span class="flex h-10 w-10 items-center justify-center rounded-full bg-paper text-xl ring-1 ring-ink/10">
-              {{ tier.icon }}
-            </span>
-            <span class="mt-3 block font-serif text-2xl italic leading-none">Bs. {{ tier.amount }}</span>
-            <span class="mt-1.5 block text-sm font-medium text-ink">{{ tier.title }}</span>
-            <span class="mt-1 block min-h-[32px] text-xs leading-relaxed text-ink-muted">{{ tier.blurb }}</span>
-            <span
-              class="mt-4 inline-flex items-center gap-1 text-[11px] font-medium"
-              :class="selectedAmount === tier.amount ? 'text-accent-700' : 'text-ink-muted group-hover:text-ink-soft'"
-            >
-              <AppIcon :name="selectedAmount === tier.amount ? 'check' : 'copy'" :size="12" />
-              {{ selectedAmount === tier.amount ? 'Monto copiado' : 'Copiar monto' }}
-            </span>
-          </button>
-        </div>
-
-        <p class="mt-3 text-xs text-ink-muted">¿Otro monto? También sirve. El QR no juzga.</p>
-      </section>
-
-      <!-- ─── Meme oficial ────────────────────────────────────────── -->
-      <section class="mt-16 grid items-center gap-8 sm:mt-20 lg:grid-cols-2 lg:gap-14">
-        <div class="relative mx-auto w-full max-w-md">
-          <div class="absolute -inset-3 -rotate-2 rounded-3xl bg-amber-200/45" aria-hidden="true" />
-          <figure
-            class="relative -rotate-1 rounded-2xl border border-ink/10 bg-white p-3 shadow-lift transition duration-300 hover:rotate-0"
-          >
-            <img
-              :src="MEME_IMAGE"
-              alt="Meme de un perrito con traje que dice: muchas gracias por su atención, aplaudan y no hagan preguntas"
-              class="w-full rounded-xl"
-              width="736"
-              height="736"
-              loading="lazy"
-              decoding="async"
-            />
-            <figcaption class="px-2 pb-1 pt-3 text-center text-[11px] text-ink-muted">
-              El meme oficial del fondo. Calidad cuestionable, intención noble.
-            </figcaption>
-          </figure>
-          <span
-            class="absolute -right-2 -top-3 rotate-6 rounded-full bg-ink px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-white shadow-lift"
-          >
-            Meme certificado
-          </span>
-        </div>
+      <!-- ─── Fondo de memes ─────────────────────────────────────── -->
+      <section class="mt-20 grid items-center gap-10 border-t border-ink/10 pt-14 md:grid-cols-[280px_minmax(0,1fr)] md:gap-14">
+        <figure class="mx-auto w-full max-w-[280px] -rotate-2 rounded-lg bg-white p-2.5 pb-3 shadow-lift ring-1 ring-ink/10">
+          <img
+            :src="MEME_IMAGE"
+            alt="Meme de un perrito con traje: «Muchas gracias por su atención, aplaudan y no hagan preguntas»"
+            class="w-full rounded"
+            width="736"
+            height="736"
+            loading="lazy"
+            decoding="async"
+          />
+          <figcaption class="pt-2.5 text-center font-serif text-[15px] italic text-ink-soft">Meme oficial del fondo</figcaption>
+        </figure>
 
         <div>
-          <p class="panel-title">Causa #2, pero con más estilo</p>
-          <h2 class="font-serif text-3xl italic leading-tight sm:text-4xl">El Fondo Oficial de Memes</h2>
-          <p class="mt-3 max-w-xl text-[15px] leading-relaxed text-ink-soft">
-            Los memes son parte del servicio: hacen que estudiar Física a las 2 a.m. duela un poquito menos.
-            Tu donación también financia esta área tan seria del proyecto.
+          <h2 class="font-serif text-[clamp(2rem,4vw,2.75rem)] italic leading-tight">El Fondo Oficial de Memes</h2>
+          <p class="mt-3 max-w-[34rem] text-[15px] leading-relaxed text-ink-soft">
+            Estudiar Física a las 2 a.&nbsp;m. duele menos con memes. Si tienes uno bueno sobre la preu, el examen de
+            admisión o el profe que no explica, mándamelo: los mejores aparecen por aquí.
           </p>
-
-          <ul class="mt-5 space-y-2.5 text-sm text-ink-soft">
-            <li class="flex items-start gap-2.5">
-              <span class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-50 text-accent-700">
-                <AppIcon name="check" :size="12" />
-              </span>
-              <span><strong class="font-medium text-ink">Bs. 10:</strong> un meme reciclado, pero con cariño.</span>
-            </li>
-            <li class="flex items-start gap-2.5">
-              <span class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-50 text-accent-700">
-                <AppIcon name="check" :size="12" />
-              </span>
-              <span><strong class="font-medium text-ink">Bs. 50:</strong> un meme nuevo, editado sin dormir.</span>
-            </li>
-            <li class="flex items-start gap-2.5">
-              <span class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-50 text-accent-700">
-                <AppIcon name="check" :size="12" />
-              </span>
-              <span><strong class="font-medium text-ink">Bs. 100:</strong> un meme que sí da risa (sin garantía).</span>
-            </li>
-          </ul>
-
-          <div class="mt-6 flex flex-wrap gap-2">
-            <a :href="waMeme" target="_blank" rel="noopener" class="btn-primary">
-              <AppIcon name="message" :size="16" />
-              Mandar mi meme
-            </a>
-            <a href="#qr-panel" class="btn-outline">
-              <AppIcon name="heart" :size="16" />
-              Financiar el fondo
-            </a>
-          </div>
-          <p class="mt-3 text-xs text-ink-muted">Aceptamos memes propios, robados con permiso y de dudosa procedencia.</p>
-        </div>
-      </section>
-
-      <!-- ─── Transparencia ───────────────────────────────────────── -->
-      <section class="mt-16 rounded-2xl border border-ink/[0.08] bg-white p-6 shadow-card sm:mt-20 sm:p-8">
-        <div class="max-w-2xl">
-          <p class="panel-title">Transparencia (más o menos)</p>
-          <h2 class="font-serif text-3xl italic leading-tight sm:text-4xl">¿En qué se va tu aporte?</h2>
-        </div>
-
-        <div class="mt-7 grid gap-6 sm:grid-cols-3">
-          <div>
-            <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-accent-50 text-accent-700">
-              <AppIcon name="bank" :size="19" />
-            </span>
-            <h3 class="mt-3 text-sm font-semibold text-ink">Servidores y APIs</h3>
-            <p class="mt-1.5 text-[13px] leading-relaxed text-ink-soft">
-              Hosting, base de datos y las APIs de IA que extraen y ordenan las preguntas.
-            </p>
-          </div>
-          <div>
-            <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-700">
-              <AppIcon name="book" :size="19" />
-            </span>
-            <h3 class="mt-3 text-sm font-semibold text-ink">Más preguntas</h3>
-            <p class="mt-1.5 text-[13px] leading-relaxed text-ink-soft">
-              Subir nuevos bancos y mantener el buscador rápido, gratis y sin anuncios.
-            </p>
-          </div>
-          <div>
-            <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
-              <AppIcon name="heart" :size="19" />
-            </span>
-            <h3 class="mt-3 text-sm font-semibold text-ink">Pollo y memes</h3>
-            <p class="mt-1.5 text-[13px] leading-relaxed text-ink-soft">
-              La parte no negociable: alimentar al dev y mantener el humor en producción.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <!-- ─── Contacto / trabajar conmigo ─────────────────────────── -->
-      <section class="relative mt-16 overflow-hidden rounded-3xl bg-ink text-white shadow-lift sm:mt-20">
-        <div class="pointer-events-none absolute -right-16 -top-24 h-72 w-72 rounded-full bg-accent-500/25 blur-3xl" />
-        <div class="pointer-events-none absolute -bottom-24 left-1/3 h-64 w-64 rounded-full bg-amber-400/15 blur-3xl" />
-
-        <div class="relative p-6 sm:p-10">
-          <span class="pill bg-white/10 text-white/80 ring-1 ring-white/15">
-            <AppIcon name="sparkles" :size="12" />
-            Hablemos
-          </span>
-
-          <h2 class="mt-4 max-w-2xl font-serif text-3xl italic leading-tight sm:text-4xl">
-            ¿Más recomendaciones o quieres trabajar conmigo?
-          </h2>
-          <p class="mt-3 max-w-xl text-sm leading-relaxed text-white/70">
-            Escríbeme directo. Hago páginas web, apps, automatizaciones y cosas raras con IA. También acepto
-            recomendaciones de pollo y memes.
-          </p>
-
-          <div class="mt-6 flex flex-wrap items-center gap-2.5">
-            <a
-              :href="waWork"
-              target="_blank"
-              rel="noopener"
-              class="btn bg-white text-ink hover:bg-paper"
-            >
-              <AppIcon name="message" :size="16" />
-              WhatsApp: {{ WA_DISPLAY }}
-            </a>
-            <a href="tel:+59168597440" class="btn border border-white/20 text-white hover:bg-white/10">
-              Llamar
-            </a>
-          </div>
-
-          <div class="mt-8 flex items-center gap-3 border-t border-white/10 pt-5">
-            <span class="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 font-serif text-lg italic">
-              IC
-            </span>
-            <div>
-              <p class="text-sm font-medium">Isaac Creativo Dev</p>
-              <p class="text-xs text-white/50">Web · IA · memes · soluciones a medida</p>
-            </div>
-            <span class="ml-auto hidden font-mono text-[11px] text-white/40 sm:inline">{{ WA_DISPLAY }}</span>
-          </div>
+          <a :href="waMeme" target="_blank" rel="noopener" class="btn-outline mt-5">
+            <AppIcon name="message" :size="16" />
+            Mandar un meme
+          </a>
         </div>
       </section>
     </main>
 
-    <AppFooter />
+    <AppFooter narrow />
     <ToastHost />
+
+    <!-- Móvil: barra de pago fija hasta llegar al ticket -->
+    <Transition
+      enter-from-class="translate-y-full"
+      leave-to-class="translate-y-full"
+      enter-active-class="transition-transform duration-200 motion-reduce:transition-none"
+      leave-active-class="transition-transform duration-200 motion-reduce:transition-none"
+    >
+      <div
+        v-if="!ticketVisible"
+        class="fixed inset-x-0 bottom-0 z-40 border-t border-ink/10 bg-receipt/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur lg:hidden"
+      >
+        <div class="mx-auto flex max-w-md items-center gap-3">
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-[12px] text-ink-muted">{{ lineIcon }} {{ lineName }}</p>
+            <p class="font-serif text-[24px] italic leading-none text-ink">{{ amount ? fmt(amount) : 'Bs. —' }}</p>
+          </div>
+          <button type="button" class="btn-primary" @click="goToTicket">
+            <AppIcon name="heart" :size="15" />
+            Pagar con QR
+          </button>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
+
+<style scoped>
+.step-num {
+  @apply inline-flex h-6 w-6 shrink-0 translate-y-[-2px] items-center justify-center rounded-full bg-ink font-mono text-[12px] font-medium text-white;
+}
+
+/* Menú tipo pizarra de pollería */
+.menu-row {
+  @apply grid w-full grid-cols-[2rem_auto_minmax(1rem,1fr)_auto] items-center gap-3 rounded-xl px-3 py-3.5 text-left transition-colors
+    focus-within:outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500;
+}
+.menu-row:hover {
+  @apply bg-mustard-50/70;
+}
+.menu-row.is-active {
+  @apply bg-mustard-100/80 ring-1 ring-mustard-300;
+}
+.menu-leader {
+  @apply h-0 self-end border-b-2 border-dotted border-ink/20;
+  margin-bottom: 0.45rem;
+}
+@media (max-width: 420px) {
+  .menu-row {
+    grid-template-columns: 1.75rem minmax(0, 1fr) auto;
+  }
+  .menu-leader {
+    display: none;
+  }
+}
+
+/* Ticket de pedido */
+.ticket {
+  filter: drop-shadow(0 1px 0 rgba(28, 27, 25, 0.06)) drop-shadow(0 12px 28px rgba(28, 27, 25, 0.14));
+}
+.ticket-body {
+  @apply bg-receipt px-5 pb-5 pt-4 sm:px-6;
+}
+.ticket-edge {
+  height: 10px;
+  background: radial-gradient(circle at 7px 0, transparent 6px, #fffdf7 6.5px) repeat-x;
+  background-size: 14px 10px;
+  transform: scaleY(-1);
+}
+.ticket-edge--bottom {
+  transform: none;
+}
+.ticket-rule {
+  @apply my-4 border-t-2 border-dashed border-ink/15;
+}
+.ticket-field {
+  @apply flex items-center justify-between gap-3 py-0.5;
+}
+.copy-btn {
+  @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-muted transition hover:bg-ink/5 hover:text-ink
+    focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500;
+}
+.stamp {
+  @apply shrink-0 rotate-[-8deg] rounded border-2 border-mustard-500 px-2 py-0.5 font-serif text-[17px] italic leading-none text-mustard-700;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu-row {
+    transition: none;
+  }
+}
+</style>
