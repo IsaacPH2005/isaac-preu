@@ -63,4 +63,4 @@ services:
 
 volumes:
   caddy_data:
-  caddy_config:[cite: 3]
+  caddy_config:
