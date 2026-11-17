@@ -1,0 +1,66 @@
+# ─── Producción (VPS) ─────────────────────────────────────────────────
+# Solo búsqueda: no se pueden subir, reprocesar ni borrar documentos, no hay claves
+# de IA, el PDF original no se publica y solo Caddy (80/443) está expuesto.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml build
+#   bash scripts/import.sh export        # primera vez: carga el banco y arranca todo
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Requiere Docker Compose ≥ 2.24 (por las etiquetas !reset / !override).
+services:
+  backend:
+    environment:
+      ALLOW_UPLOADS: "false"
+      EXPOSE_PDF: "false"
+      # Ninguna clave de IA en producción, aunque existan en el .env del servidor.
+      GEMINI_API_KEY: ""
+      GEMINI_API_KEYS: ""
+      OPENROUTER_API_KEY: ""
+      NVIDIA_API_KEY: ""
+      CORS_ORIGINS: https://${DOMAIN:?Define DOMAIN en .env}
+    ports: !reset []
+    volumes: !override
+      # Solo lectura: ni la app ni un atacante pueden alterar las imágenes.
+      - storage:/storage:ro
+
+  frontend:
+    ports: !reset []
+
+  # Sin subidas no hace falta el worker (solo arranca con --profile ingest).
+  worker:
+    profiles: ["ingest"]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Define DOMAIN en .env}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
+  # Utilidad para scripts/import.sh: única vía para escribir en el volumen de imágenes.
+  storage-import:
+    image: alpine:3.20
+    profiles: ["tools"]
+    volumes:
+      - storage:/storage
+    command:
+      - sh
+      - -c
+      - >-
+        rm -rf /storage/pages /storage/pdfs &&
+        tar -C /storage -xzf - &&
+        chmod -R a+rX /storage &&
+        echo "Imagenes cargadas: $$(find /storage/pages -name '*.png' | wc -l)"
+
+volumes:
+  caddy_data:
+  caddy_config:
