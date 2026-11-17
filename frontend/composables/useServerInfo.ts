@@ -3,6 +3,7 @@ interface HealthResponse {
   gemini_configured: boolean
   gemini_keys: number
   allow_uploads: boolean
+  solutions_enabled?: boolean
 }
 
 /** Configuración del backend (p. ej. modo solo lectura en producción). */
@@ -19,5 +20,7 @@ export function useServerInfo() {
     }
   }
 
-  return { info, allowUploads, load }
+  const solutionsEnabled = computed(() => info.value?.solutions_enabled ?? false)
+
+  return { info, allowUploads, solutionsEnabled, load }
 }

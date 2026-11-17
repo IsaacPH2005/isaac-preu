@@ -39,6 +39,7 @@ class QuestionOut(BaseModel):
     document_id: int
     document_filename: str
     question_number: int
+    question_label: str = ""
     page_number: int
     page_image_path: str
     subject: str
@@ -46,8 +47,22 @@ class QuestionOut(BaseModel):
     statement: str
     options: list[str]
     has_diagram: bool
+    exam: str = ""
+    exam_type: str = ""
+    exam_year: int | None = None
+    answer: str = ""
+    answer_detail: str = ""
+    difficulty: int = 0
+    key_note: str = ""
+    has_solution: bool = False
+    figures: list[str] = Field(default_factory=list, exclude=True)
     rank: float | None = None
     pdf_path: str = Field(exclude=True)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def figure_urls(self) -> list[str]:
+        return [f"/storage/{p}" for p in self.figures]
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -80,8 +95,58 @@ class TopicCount(BaseModel):
     count: int
 
 
+class ExamCount(BaseModel):
+    exam: str
+    exam_type: str
+    exam_year: int | None
+    first_page: int
+    last_page: int
+    count: int
+
+
+class ExamTypeCount(BaseModel):
+    exam_type: str
+    count: int
+
+
+class DifficultyCount(BaseModel):
+    difficulty: int
+    count: int
+
+
 class FiltersOut(BaseModel):
     total: int
     diagram_count: int
+    answered_count: int = 0
+    page_min: int = 0
+    page_max: int = 0
     subjects: list[SubjectCount]
     topics: dict[str, list[TopicCount]]
+    exam_types: list[ExamTypeCount] = []
+    exams: list[ExamCount] = []
+    difficulties: list[DifficultyCount] = []
+
+
+class SolutionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    question_id: int
+    status: str  # pending | done | failed | none
+    figure_data: list[str] = []
+    strategy: str = ""
+    steps: list[str] = []
+    shortcut: str = ""
+    common_mistake: str = ""
+    final_answer: str = ""
+    reaches_key: bool | None = None
+    confidence: str = ""
+    note: str = ""
+    error: str = ""
+    can_generate: bool = False
+
+
+class AnswerKeyStats(BaseModel):
+    key_rows: int
+    matched_questions: int
+    unmatched_key_rows: int
+    unmatched: list[str] = []

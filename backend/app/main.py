@@ -7,7 +7,7 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.database import async_engine
-from app.routers import documents, questions
+from app.routers import answer_key, documents, questions, solutions
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
 
@@ -39,6 +39,8 @@ app.add_middleware(
 
 app.include_router(documents.router)
 app.include_router(questions.router)
+app.include_router(answer_key.router)
+app.include_router(solutions.router)
 
 
 @app.get("/api/health", tags=["system"])
@@ -52,6 +54,7 @@ async def health() -> dict:
         "openrouter_configured": bool(settings.openrouter_api_key),
         "nvidia_configured": bool(settings.nvidia_api_key),
         "allow_uploads": settings.allow_uploads,
+        "solutions_enabled": settings.solutions_enabled,
         "expose_pdf": settings.expose_pdf,
     }
 

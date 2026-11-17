@@ -8,3 +8,7 @@ node_modules/
 .data/
 storage/
 export/
+
+# Material de trabajo local (la clave ya está en la base de datos)
+pdf/
+repomix-output.xml

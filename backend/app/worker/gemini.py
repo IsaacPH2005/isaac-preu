@@ -34,12 +34,31 @@ logger = logging.getLogger(__name__)
 
 
 class ExtractedQuestion(BaseModel):
-    number: int = Field(description="Número de la pregunta tal como aparece impreso. 0 si no tiene número.")
+    label: str = Field(
+        description=(
+            "Etiqueta impresa de la pregunta tal cual, sin el punto ni el guion final "
+            "(ej. '5', 'A1', 'G3', 'F12', 'Q-13', 'B2'). Cadena vacía si no tiene."
+        )
+    )
+    number: int = Field(
+        description=(
+            "Número impreso en la etiqueta ('G3' -> 3, 'Q-13' -> 13, '5' -> 5). NO renumeres: si las "
+            "etiquetas reinician por materia (A1, A2, G1, G2…), respeta ese número. 0 si no tiene."
+        )
+    )
     subject: str = Field(
         description=(
             "Encabezado de materia que aparece EN ESTA PÁGINA por encima de la pregunta "
             "(ej. FÍSICA, QUÍMICA, ÁLGEBRA). Cadena vacía si en esta página no hay ningún "
             "encabezado de materia antes de la pregunta."
+        )
+    )
+    exam_header: str = Field(
+        description=(
+            "Título del EXAMEN que aparece EN ESTA PÁGINA por encima de la pregunta, completo y tal cual "
+            "(ej. 'SEGUNDO EXAMEN DE INGRESO 1-2012', 'EXAMEN DE INGRESO 2-2020 (ÚNICA OPCIÓN) VIRTUAL - "
+            "MODELO 1', 'PRIMER PARCIAL 1-2024 (PRE-U)'). Cadena vacía si en esta página no hay un "
+            "título de examen antes de la pregunta."
         )
     )
     topic: str = Field(
@@ -56,6 +75,13 @@ class ExtractedQuestion(BaseModel):
     )
     has_diagram: bool = Field(
         description="true si la pregunta incluye o depende de una figura, gráfico, diagrama, tabla dibujada o esquema."
+    )
+    figure_box: list[int] = Field(
+        description=(
+            "Si has_diagram es true: caja de la figura de ESTA pregunta en la imagen como "
+            "[ymin, xmin, ymax, xmax] normalizada de 0 a 1000 (incluye rótulos y medidas de la figura, "
+            "no el enunciado ni las alternativas). Lista vacía si no hay figura."
+        )
     )
 
 
@@ -98,7 +124,15 @@ Reglas:
 página tiene dos columnas, primero la izquierda completa y luego la derecha).
 2. `subject`: solo el encabezado de materia visible en esta página antes de la pregunta \
 (títulos como "FÍSICA", "QUÍMICA", "ÁLGEBRA"). Si no hay encabezado visible, cadena vacía; \
-el sistema heredará la materia de la página anterior. No inventes la materia a partir del contenido.
+el sistema heredará la materia de la página anterior. No inventes la materia a partir del contenido. \
+EXCEPCIÓN: si el encabezado agrupa dos materias ("ARITMÉTICA – ÁLGEBRA", "GEOMETRÍA – TRIGONOMETRÍA"), \
+devuelve en CADA pregunta de esa sección la materia concreta según su contenido (ARITMÉTICA o ÁLGEBRA; \
+GEOMETRÍA o TRIGONOMETRÍA), nunca el encabezado combinado.
+2b. `exam_header`: si en la página hay un título de examen (universidad/facultad a un lado y \
+"EXAMEN DE INGRESO…", "PRIMER PARCIAL…", "SEGUNDO EXAMEN…", gestión "1-2012", "(ÚNICA OPCIÓN)", \
+"MODELO 1"…), ponlo completo en la PRIMERA pregunta que aparece debajo de él, uniendo sus partes en \
+una sola línea (ej. "EXAMEN DE INGRESO 2-2020 (ÚNICA OPCIÓN) VIRTUAL - MODELO 1"). No incluyas el \
+nombre de la universidad ni la fecha. En las demás preguntas, cadena vacía; el sistema lo hereda.
 3. `topic`: clasifica el tema específico en español, conciso (2-5 palabras), con mayúscula \
 inicial y usando la denominación más estándar del curso (ej. "Ecuaciones cuadráticas", \
 "Cinemática", "MRUV", "Leyes de Newton", "Estequiometría", "Genética mendeliana").
@@ -222,6 +256,15 @@ _retry = retry(
     retry=retry_if_exception(_is_retryable),
     wait=_wait,
     stop=stop_after_attempt(settings.gemini_max_retries),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
+
+# Para peticiones interactivas (alguien espera la respuesta): pocos intentos y se pasa a otro proveedor.
+_quick_retry = retry(
+    retry=retry_if_exception(_is_retryable),
+    wait=wait_exponential_jitter(initial=2, max=8),
+    stop=stop_after_attempt(2),
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
 )
@@ -381,6 +424,28 @@ class GeminiClient:
         ]
         config = self._config(EXTRACTION_SYSTEM, PageExtraction, max_tokens=16384)
         return self._run(contents, config, PageExtraction)  # type: ignore[return-value]
+
+    def solve_question(self, images: list[bytes], prompt: str, patient: bool = False):
+        from app.worker.solver import SOLVE_SYSTEM, QuestionSolution
+
+        contents: list = [types.Part.from_bytes(data=img, mime_type="image/png") for img in images]
+        contents.append(prompt)
+        config = self._config(SOLVE_SYSTEM, QuestionSolution, max_tokens=8192)
+        if patient:  # pregunta con figura: solo Gemini, así que se insiste más
+            return self._run(contents, config, QuestionSolution)
+        kid = self._next_key()
+        try:
+            return self._call_quick(kid, contents, config, QuestionSolution)
+        except Exception as exc:
+            if _is_daily_quota(exc):
+                self._mark_exhausted(kid)
+            raise
+
+    @_quick_retry
+    def _call_quick(self, kid: str, contents, config: types.GenerateContentConfig, schema: type[BaseModel]) -> BaseModel:
+        _acquire_slot(kid)
+        response = self._clients[kid].models.generate_content(model=self.model, contents=contents, config=config)
+        return self._parse(response, schema)
 
     def group_topics(self, subject: str, topics: list[str], existing: list[str]) -> dict[str, str]:
         payload = {"temas_canonicos_existentes": existing, "temas_a_normalizar": topics}

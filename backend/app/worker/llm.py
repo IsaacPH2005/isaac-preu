@@ -31,6 +31,7 @@ class Provider(Protocol):
     def has_capacity(self) -> bool: ...
     def extract_page(self, image_bytes: bytes, page_number: int) -> PageExtraction: ...
     def group_topics(self, subject: str, topics: list[str], existing: list[str]) -> dict[str, str]: ...
+    def solve_question(self, images: list[bytes], prompt: str, patient: bool = False): ...
 
 
 class AllProvidersExhausted(ProviderExhausted):
@@ -99,3 +100,36 @@ class ExtractionClient:
 
     def group_topics(self, subject: str, topics: list[str], existing: list[str]) -> dict[str, str]:
         return self._dispatch("group_topics", subject, topics, existing)
+
+    def solve_question(self, images: list[bytes], prompt: str, needs_vision: bool = False):
+        """
+        Interactivo: si un proveedor falla o está saturado, se prueba enseguida el siguiente.
+        needs_vision=True (pregunta con figura): solo Gemini, que lee figuras con fiabilidad; los modelos
+        gratuitos de respaldo tienden a inventar medidas.
+        """
+        by_name = {p.name: p for p in self.providers}
+        if needs_vision:
+            providers = [by_name[n] for n in settings.solver_vision_provider_list if n in by_name]
+            if not providers:
+                raise ProviderNotConfigured(
+                    "Ningún proveedor de SOLVER_VISION_PROVIDERS está configurado para preguntas con figura"
+                )
+        elif settings.solver_provider_list:
+            providers = [by_name[n] for n in settings.solver_provider_list if n in by_name] or list(self.providers)
+        else:
+            with self._lock:
+                start = next(self._rr) % len(self.providers)
+            providers = self.providers[start:] + self.providers[:start]
+        last: Exception | None = None
+        for i, provider in enumerate(providers):
+            if not provider.has_capacity():
+                continue
+            try:
+                # El último proveedor disponible insiste más (nadie más puede responder)
+                return provider.solve_question(images, prompt, patient=i == len(providers) - 1)
+            except Exception as exc:
+                logger.warning("%s no pudo resolver la pregunta (%s); se prueba otro proveedor", provider.name, exc)
+                last = exc
+        if last is None:
+            raise AllProvidersExhausted(f"Sin cuota disponible en ningún proveedor ({self._labels()})")
+        raise last

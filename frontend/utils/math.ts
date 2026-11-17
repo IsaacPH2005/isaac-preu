@@ -92,6 +92,18 @@ function escapeHtml(s: string): string {
 
 const cache = new Map<string, string>()
 
+// Notación trigonométrica en español que KaTeX no trae de serie
+const MACROS: Record<string, string> = {
+  '\\sen': '\\operatorname{sen}',
+  '\\senh': '\\operatorname{senh}',
+  '\\tg': '\\operatorname{tg}',
+  '\\ctg': '\\operatorname{ctg}',
+  '\\cotg': '\\operatorname{cotg}',
+  '\\cosec': '\\operatorname{cosec}',
+  '\\arcsen': '\\operatorname{arcsen}',
+  '\\arctg': '\\operatorname{arctg}',
+}
+
 export function renderMathHtml(src: string): string {
   if (!src) return ''
   const hit = cache.get(src)
@@ -101,8 +113,11 @@ export function renderMathHtml(src: string): string {
     .map((seg) => {
       if (seg.type === 'text') return escapeHtml(seg.value).replace(/\n/g, '<br>')
       try {
-        return katex.renderToString(seg.value, {
+        // Una barra invertida suelta al final ("30\pi\ ") rompe la fórmula entera
+        const value = seg.value.replace(/\\\s*$/, '')
+        return katex.renderToString(value, {
           displayMode: seg.display,
+          macros: { ...MACROS },
           throwOnError: false,
           strict: 'ignore',
           trust: false,

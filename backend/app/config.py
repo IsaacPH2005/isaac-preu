@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     nvidia_rpm: int = 30  # el plan gratuito permite ~40/min
     # Proveedores que se reparten las páginas (solo se usan los que tengan clave)
     llm_providers: str = "gemini,openrouter,nvidia"
+    # "Cómo resolverlo": orden de proveedores (vacío = los de LLM_PROVIDERS, rotando) y los que se usan
+    # en preguntas con figura (deben leer imágenes con fiabilidad).
+    solver_providers: str = ""
+    solver_vision_providers: str = "gemini"
 
     render_dpi: int = 150
     max_upload_mb: int = 300
@@ -54,6 +58,13 @@ class Settings(BaseSettings):
     allow_uploads: bool = True
     # false en producción: el PDF original no se sirve (solo las imágenes de cada página).
     expose_pdf: bool = True
+    # Generar soluciones con IA bajo demanda. Vacío = igual que allow_uploads
+    # (en producción de solo lectura solo se muestran las soluciones ya generadas).
+    allow_solutions: bool | None = None
+
+    @property
+    def solutions_enabled(self) -> bool:
+        return self.allow_uploads if self.allow_solutions is None else self.allow_solutions
 
     @property
     def api_keys(self) -> list[str]:
@@ -69,6 +80,14 @@ class Settings(BaseSettings):
     def nvidia_model_list(self) -> list[str]:
         models = [m.strip() for m in self.nvidia_models.split(",") if m.strip()]
         return models or [m.strip() for m in DEFAULT_NVIDIA_MODELS.split(",")]
+
+    @property
+    def solver_provider_list(self) -> list[str]:
+        return [p.strip().lower() for p in self.solver_providers.split(",") if p.strip()]
+
+    @property
+    def solver_vision_provider_list(self) -> list[str]:
+        return [p.strip().lower() for p in self.solver_vision_providers.split(",") if p.strip()]
 
     @property
     def llm_provider_list(self) -> list[str]:

@@ -36,11 +36,28 @@ function clearSearch() {
 // ─── Disparadores de carga ──────────────────────────────────────────
 const filterKey = computed(() => {
   const f = filters.value
-  return JSON.stringify([f.q.trim(), f.subject, f.topic, f.documentId, f.hasDiagram])
+  return JSON.stringify([
+    f.q.trim(),
+    f.subject,
+    f.topic,
+    f.documentId,
+    f.hasDiagram,
+    f.examType,
+    f.exam,
+    f.pageFrom,
+    f.pageTo,
+    f.difficulty,
+    f.hasAnswer,
+  ])
 })
 watch(filterKey, () => {
   if (filters.value.page !== 1) filters.value.page = 1 // el watcher de página recarga
   else fetchQuestions()
+})
+// Los contadores de cada grupo dependen de los demás filtros (excepto la búsqueda por texto)
+const facetKey = computed(() => {
+  const f = filters.value
+  return JSON.stringify([f.subject, f.topic, f.documentId, f.hasDiagram, f.examType, f.exam, f.pageFrom, f.pageTo, f.difficulty, f.hasAnswer])
 })
 watch(
   () => filters.value.page,
@@ -49,10 +66,7 @@ watch(
     resultsTop.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   },
 )
-watch(
-  () => [filters.value.documentId, filters.value.hasDiagram],
-  () => fetchFilters(),
-)
+watch(facetKey, () => fetchFilters())
 // Un documento terminó (o se eliminó): refresca todo.
 watch(finishedTick, () => {
   fetchFilters()
@@ -92,6 +106,12 @@ function filterByTopic(q: Question) {
   filters.value.topic = q.topic
 }
 
+function filterByExam(q: Question) {
+  filters.value.exam = q.exam
+}
+
+const DIFF_LABEL = ['', 'Fácil', 'Medio', 'Difícil', 'Experto']
+
 const total = computed(() => result.value?.total ?? 0)
 const items = computed(() => result.value?.items ?? [])
 const hasAnyQuestion = computed(() => (options.value?.total ?? 0) > 0 || total.value > 0)
@@ -106,6 +126,15 @@ const chips = computed(() => {
   }
   if (f.subject) out.push({ label: subjectLabel(f.subject), clear: () => ((f.subject = ''), (f.topic = '')) })
   if (f.topic) out.push({ label: f.topic, clear: () => (f.topic = '') })
+  if (f.examType) out.push({ label: f.examType, clear: () => ((f.examType = ''), (f.exam = '')) })
+  if (f.exam) out.push({ label: f.exam, clear: () => (f.exam = '') })
+  if (f.pageFrom || f.pageTo) {
+    const label =
+      f.pageFrom === f.pageTo ? `Pág. ${f.pageFrom}` : `Pág. ${f.pageFrom ?? '…'}–${f.pageTo ?? '…'}`
+    out.push({ label, clear: () => ((f.pageFrom = null), (f.pageTo = null)) })
+  }
+  if (f.difficulty) out.push({ label: DIFF_LABEL[f.difficulty], clear: () => (f.difficulty = null) })
+  if (f.hasAnswer) out.push({ label: 'Con respuesta', clear: () => (f.hasAnswer = false) })
   if (f.hasDiagram) out.push({ label: 'Con gráficos', clear: () => (f.hasDiagram = false) })
   return out
 })
@@ -173,6 +202,9 @@ const suggestions = ['plano inclinado', 'Ruffini', 'moles', 'MRUV', 'ecuación c
             </button>
           </div>
         </div>
+
+        <!-- Aviso de fiabilidad del contenido -->
+        <QuestionsDisclaimer v-if="hasAnyQuestion" class="mt-6" />
 
         <!-- Cabecera de resultados -->
         <div class="mt-6 flex flex-wrap items-center gap-2">
@@ -247,6 +279,7 @@ const suggestions = ['plano inclinado', 'Ruffini', 'moles', 'MRUV', 'ecuación c
             :question="q"
             @view-page="viewing = $event"
             @filter-topic="filterByTopic"
+            @filter-exam="filterByExam"
           />
         </div>
 

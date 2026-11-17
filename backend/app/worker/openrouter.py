@@ -224,6 +224,19 @@ class OpenAICompatClient:
         ]
         return self._complete(messages, PageExtraction)  # type: ignore[return-value]
 
+    def solve_question(self, images: list[bytes], prompt: str, patient: bool = False):
+        from app.worker.solver import SOLVE_SYSTEM, QuestionSolution
+
+        content: list = [{"type": "text", "text": prompt}]
+        for raw in images:
+            img = base64.b64encode(raw).decode()
+            content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}"}})
+        messages = [
+            {"role": "system", "content": SOLVE_SYSTEM + _schema_instructions(QuestionSolution)},
+            {"role": "user", "content": content},
+        ]
+        return self._complete(messages, QuestionSolution)
+
     def group_topics(self, subject: str, topics: list[str], existing: list[str]) -> dict[str, str]:
         payload = {"temas_canonicos_existentes": existing, "temas_a_normalizar": topics}
         messages = [

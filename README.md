@@ -162,6 +162,28 @@ Si en algún caso quieres publicar el PDF: `export.sh --con-pdf` y `EXPOSE_PDF=t
 
 > **Cuotas gratuitas:** OpenRouter permite 50 solicitudes al día con modelos `:free` (1000 al día si la cuenta tiene al menos 10 USD de crédito). Gemini: 5 solicitudes/min y unas 20/día por modelo y proyecto. Cada página es una solicitud. Varias claves de un mismo proyecto comparten cuota. Usar varios proyectos para superar los límites gratuitos va contra las condiciones de Google y puede suponer la suspensión de las claves. Activar la facturación cuesta menos de 1 USD por un PDF de unas 200 páginas.
 
+## Clave de respuestas, figuras y soluciones
+
+**Clave oficial.** En «Documentos» → *Subir clave (JSON/CSV)*, o por consola:
+`docker compose exec backend python -m app.answer_key /ruta/claves.json`.
+Cada fila (`materia, tema, pagina, ejercicio, prefijo, respuesta, detalle, dificultad, legible, nota`) se
+empareja por página impresa + número de pregunta + materia. La clave corrige materia y tema, y añade la
+respuesta y la dificultad. Se vuelve a aplicar sola al terminar de (re)procesar un documento.
+
+**Figuras.** Al procesar un documento se recortan del PDF (imágenes incrustadas y, en páginas
+escaneadas, la caja que indica la IA) en `storage/pages/{doc}/figs/`. Para repetirlo sin volver a
+extraer: `docker compose exec backend python -m app.figures <document_id>`.
+
+**«Cómo resolverlo».** La IA genera estrategia, pasos, tip de examen y error común. Se genera una vez y
+queda guardada. En producción solo se muestran las ya generadas.
+
+| Variable | Defecto | |
+|---|---|---|
+| `SOLVER_PROVIDERS` | *(vacío = LLM_PROVIDERS rotando)* | Orden de proveedores, ej. `nvidia,gemini,openrouter` |
+| `SOLVER_VISION_PROVIDERS` | `gemini` | Proveedores para preguntas con figura, ej. `nvidia,gemini` |
+
+> Reprocesar un documento vuelve a crear sus preguntas y **borra sus soluciones guardadas**.
+
 ## Desarrollo sin Docker
 
 ```bash

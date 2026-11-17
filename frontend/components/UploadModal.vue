@@ -66,6 +66,46 @@ function uploadFile(file: File) {
   xhr.send(form)
 }
 
+// ─── Clave de respuestas (JSON/CSV) ─────────────────────────────────
+const keyBusy = ref(false)
+const keyResult = ref<{ key_rows: number; matched_questions: number; unmatched_key_rows: number; unmatched: string[] } | null>(null)
+const keyRows = ref<number | null>(null)
+
+async function loadKeySummary() {
+  try {
+    keyRows.value = (await $fetch<{ rows: number }>('/api/answer-key')).rows
+  } catch {
+    keyRows.value = null
+  }
+}
+watch(
+  () => props.open,
+  (o) => {
+    if (o) loadKeySummary()
+  },
+  { immediate: true },
+)
+
+async function onPickKey(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  keyBusy.value = true
+  try {
+    const form = new FormData()
+    form.append('file', file)
+    keyResult.value = await $fetch('/api/answer-key', { method: 'POST', body: form })
+    keyRows.value = keyResult.value?.key_rows ?? null
+    push(`Clave aplicada: ${keyResult.value?.matched_questions} preguntas con respuesta`, 'success')
+    emit('changed')
+  } catch (err: any) {
+    push(err?.data?.detail || 'No se pudo cargar la clave', 'error')
+  } finally {
+    keyBusy.value = false
+  }
+}
+
 function handleFiles(list: FileList | null | undefined) {
   if (!list) return
   const files = Array.from(list)
@@ -263,6 +303,30 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
                 </div>
               </li>
             </ul>
+          </div>
+
+          <!-- Clave de respuestas -->
+          <div>
+            <h3 class="panel-title">Clave de respuestas</h3>
+            <div class="rounded-lg border border-ink/10 bg-white px-3 py-3">
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <p class="text-xs text-ink-soft">
+                  <template v-if="keyRows">{{ keyRows }} respuestas cargadas.</template>
+                  <template v-else>Sin clave cargada.</template>
+                  Se aplica por página y número de pregunta, también después de reprocesar.
+                </p>
+                <label class="btn-outline cursor-pointer px-2.5 py-1 text-xs" :class="keyBusy ? 'pointer-events-none opacity-60' : ''">
+                  <AppIcon :name="keyBusy ? 'loader' : 'upload'" :size="14" :class="keyBusy ? 'animate-spin' : ''" />
+                  {{ keyRows ? 'Reemplazar clave' : 'Subir clave' }} (JSON/CSV)
+                  <input type="file" accept=".json,.csv,application/json,text/csv" class="sr-only" @change="onPickKey" />
+                </label>
+              </div>
+              <div v-if="keyResult" class="mt-2 text-xs text-ink-muted">
+                {{ keyResult.matched_questions }} preguntas recibieron respuesta;
+                {{ keyResult.unmatched_key_rows }} filas de la clave no encontraron su pregunta<span v-if="keyResult.unmatched.length">:
+                  <span class="font-mono">{{ keyResult.unmatched.slice(0, 12).join(', ') }}{{ keyResult.unmatched.length > 12 ? '…' : '' }}</span></span>.
+              </div>
+            </div>
           </div>
         </div>
       </div>

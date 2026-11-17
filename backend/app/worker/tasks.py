@@ -8,8 +8,11 @@ from dataclasses import dataclass, field
 from sqlalchemy import delete, distinct, select, update
 from sqlalchemy.exc import IntegrityError
 
+from app.answer_key import apply_answer_key
 from app.config import settings
 from app.database import SyncSessionLocal
+from app.exams import ExamInfo, parse_exam
+from app.figures import extract_figures
 from app.models import Document, Question
 from app.subjects import UNCLASSIFIED, clean_topic, normalize_subject, repair_latex
 from app.worker.celery_app import celery_app
@@ -31,6 +34,7 @@ class GeminiFatalError(RuntimeError):
 @dataclass
 class IngestState:
     current_subject: str | None = None
+    current_exam: ExamInfo | None = None
     last_question_id: int | None = None
     failed_pages: list[int] = field(default_factory=list)
     question_count: int = 0
@@ -67,9 +71,23 @@ def _plain_text(statement: str | None) -> str:
     return _MATH_RE.sub("", statement or "").strip(" .:-\n")
 
 
+_LABEL_RE = re.compile(r"^\s*([A-Za-z]{0,3})\s*-?\s*(\d{1,3})\s*[.)\-:]*\s*$")
+
+
+def _label_and_number(raw_label: str | None, raw_number: int | None) -> tuple[str, int]:
+    """'G3' -> ('G3', 3); 'Q-13.-' -> ('Q-13', 13). El número impreso manda sobre el del modelo."""
+    m = _LABEL_RE.match(raw_label or "")
+    if m:
+        prefix, num = m.group(1).upper(), int(m.group(2))
+        sep = "-" if "-" in (raw_label or "").split(m.group(2))[0] else ""
+        return f"{prefix}{sep}{num}"[:16], num
+    number = max(0, raw_number or 0)
+    return (str(number) if number else ""), number
+
+
 def _looks_like_fragment(eq) -> bool:
     """Entrada sin número ni materia y casi sin texto: restos de la pregunta anterior."""
-    if eq.number or (eq.subject or "").strip():
+    if eq.number or (eq.label or "").strip() or (eq.subject or "").strip():
         return False
     return len(_plain_text(eq.statement)) < 25
 
@@ -112,9 +130,13 @@ def _persist_page(document_id: int, page: RenderedPage, result: PageExtraction |
                     continue
                 subject = normalize_subject(eq.subject) or state.current_subject or UNCLASSIFIED
                 state.current_subject = subject
+                exam = parse_exam(eq.exam_header) or state.current_exam
+                state.current_exam = exam
+                label, number = _label_and_number(eq.label, eq.number)
                 q = Question(
                     document_id=document_id,
-                    question_number=max(0, eq.number or 0),
+                    question_number=number,
+                    question_label=label,
                     page_number=page.number,
                     page_image_path=page.rel_path,
                     subject=subject,
@@ -122,6 +144,10 @@ def _persist_page(document_id: int, page: RenderedPage, result: PageExtraction |
                     statement=statement,
                     options=options,
                     has_diagram=bool(eq.has_diagram),
+                    figure_box=list(eq.figure_box or [])[:4] or None,
+                    exam=exam.label if exam else "",
+                    exam_type=exam.type if exam else "",
+                    exam_year=exam.year if exam else None,
                 )
                 s.add(q)
                 new_questions.append(q)
@@ -216,6 +242,8 @@ def process_document(self, document_id: int, resume: bool = False) -> dict:
             ).first()
             if last is not None:
                 state.current_subject = last.subject
+                if last.exam:
+                    state.current_exam = ExamInfo(last.exam, last.exam_type, last.exam_year)
                 state.last_question_id = last.id
         doc.status = "processing"
         doc.processed_pages = start
@@ -244,6 +272,22 @@ def process_document(self, document_id: int, resume: bool = False) -> dict:
                 raise
 
         normalize_topics(document_id, client)
+        # Figuras recortadas del PDF (imágenes incrustadas o caja indicada por la IA)
+        try:
+            with SyncSessionLocal() as s:
+                fig_stats = extract_figures(s, document_id)
+                s.commit()
+            logger.info("Doc %s: figuras %s", document_id, fig_stats)
+        except Exception:
+            logger.exception("No se pudieron recortar las figuras del documento %s", document_id)
+        # La clave oficial corrige materia/tema y añade respuesta y dificultad
+        try:
+            with SyncSessionLocal() as s:
+                stats = apply_answer_key(s, document_id)
+                s.commit()
+            logger.info("Doc %s: clave aplicada %s", document_id, stats)
+        except Exception:
+            logger.exception("No se pudo aplicar la clave al documento %s", document_id)
 
         if todo and len(state.failed_pages) == len(todo):
             raise RuntimeError("Gemini no pudo procesar ninguna página")
@@ -274,3 +318,77 @@ def normalize_topics_task(self, document_id: int) -> dict:
     """Vuelve a agrupar los temas de un documento sin volver a extraer sus páginas."""
     normalize_topics(document_id, ExtractionClient())
     return {"status": "ok"}
+
+
+def _page_for_solver(pdf_path, page_number: int, fallback) -> bytes:
+    """Página en mayor resolución que la de la web (las figuras pequeñas se leen mejor)."""
+    import fitz
+
+    try:
+        if pdf_path is not None and pdf_path.is_file():
+            with fitz.open(pdf_path) as pdf:
+                return pdf[page_number - 1].get_pixmap(dpi=220, alpha=False).tobytes("png")
+    except Exception:
+        logger.warning("No se pudo renderizar la página %s en alta resolución", page_number)
+    return fallback.read_bytes() if fallback.is_file() else b""
+
+
+@celery_app.task(name="bancopreu.solve_question", bind=True, acks_late=True)
+def solve_question_task(self, question_id: int) -> dict:
+    """Genera (o regenera) la solución con estrategia y tips de una pregunta."""
+    from app.models import QuestionSolution
+    from app.worker.solver import solve_payload
+
+    with SyncSessionLocal() as s:
+        q = s.get(Question, question_id)
+        if q is None:
+            return {"status": "missing"}
+        prompt = solve_payload(q)
+        figure_paths = [settings.storage_path / p for p in (q.figures or [])]
+        page_path = settings.storage_path / q.page_image_path
+        needs_vision = bool(q.has_diagram or q.figures)
+        doc = s.get(Document, q.document_id)
+        pdf_path = settings.storage_path / doc.file_path if doc else None
+        page_number = q.page_number
+
+    try:
+        images = [p.read_bytes() for p in figure_paths if p.is_file()]
+        images.append(_page_for_solver(pdf_path, page_number, page_path))
+        result = ExtractionClient().solve_question([i for i in images if i], prompt, needs_vision=needs_vision)
+        values = dict(
+            status="done",
+            figure_data=[x.strip() for x in result.figure_data if x and x.strip()],
+            strategy=repair_latex(result.strategy),
+            steps=[repair_latex(x) for x in result.steps if x and x.strip()],
+            shortcut=repair_latex(result.shortcut),
+            common_mistake=repair_latex(result.common_mistake),
+            final_answer=(result.final_answer or "").strip().upper()[:8],
+            reaches_key=result.reaches_key,
+            confidence=result.confidence,
+            note=result.note.strip(),
+            error="",
+        )
+    except Exception as exc:
+        logger.exception("No se pudo resolver la pregunta %s", question_id)
+        values = dict(status="failed", error=(fatal_error_message(exc) or f"{type(exc).__name__}: {exc}")[:500])
+
+    with SyncSessionLocal() as s:
+        sol = s.get(QuestionSolution, question_id)
+        if sol is None:
+            if s.get(Question, question_id) is None:
+                return {"status": "missing"}
+            sol = QuestionSolution(question_id=question_id)
+            s.add(sol)
+        for k, v in values.items():
+            setattr(sol, k, v)
+        s.commit()
+    return {"status": values["status"]}
+
+
+@celery_app.task(name="bancopreu.extract_figures", bind=True)
+def extract_figures_task(self, document_id: int) -> dict:
+    """Vuelve a recortar las figuras de un documento sin volver a extraer sus páginas."""
+    with SyncSessionLocal() as s:
+        stats = extract_figures(s, document_id)
+        s.commit()
+    return stats
