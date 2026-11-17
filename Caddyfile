@@ -1,6 +1,7 @@
 # Proxy de producción con HTTPS automático (Let's Encrypt).
-# DOMAIN viene del .env (ej. isaacpreu.pulsarsrl.cloud). El DNS debe apuntar a este VPS.
-{$DOMAIN} {
+# SITE_ADDRESS: ":80" = HTTP interno detrás de nginx (por defecto);
+# "isaacpreu.pulsarsrl.cloud" = Caddy gestiona HTTPS él mismo (VPS sin nginx).
+{$SITE_ADDRESS} {
 	encode zstd gzip
 
 	header {

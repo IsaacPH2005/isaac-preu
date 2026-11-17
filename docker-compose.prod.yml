@@ -1,6 +1,6 @@
 # ─── Producción (VPS) ─────────────────────────────────────────────────
 # Solo búsqueda: no se pueden subir, reprocesar ni borrar documentos, no hay claves
-# de IA, el PDF original no se publica y solo Caddy (80/443) está expuesto.
+# de IA, el PDF original no se publica y nada queda expuesto salvo vía nginx/Caddy.
 #
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml build
 #   bash scripts/import.sh export        # primera vez: carga el banco y arranca todo
@@ -30,15 +30,19 @@ services:
   worker:
     profiles: ["ingest"]
 
+  # Por defecto (VPS con nginx existente en 80/443): Caddy sirve HTTP solo en
+  # 127.0.0.1:8085 y nginx hace de puerta de entrada con HTTPS (certbot).
+  # Ver deploy/nginx/. Para un VPS sin nginx, en .env:
+  #   CADDY_SITE_ADDRESS=isaacpreu.pulsarsrl.cloud  CADDY_BIND=0.0.0.0  HTTP_PORT=80  HTTPS_PORT=443
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
     environment:
-      DOMAIN: ${DOMAIN:?Define DOMAIN en .env}
+      SITE_ADDRESS: ${CADDY_SITE_ADDRESS:-:80}
     ports:
-      - "${HTTP_PORT:-8085}:80"
-      - "${HTTPS_PORT:-8445}:443"
-      - "${HTTPS_PORT:-8445}:443/udp"
+      # 127.0.0.1: Docker se salta ufw, así que nunca publicar estos puertos a internet.
+      - "${CADDY_BIND:-127.0.0.1}:${HTTP_PORT:-8085}:80"
+      - "${CADDY_BIND:-127.0.0.1}:${HTTPS_PORT:-8445}:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

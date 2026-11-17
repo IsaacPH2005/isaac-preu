@@ -115,7 +115,7 @@ El banco se procesa **una sola vez en local**. El VPS solo sirve la búsqueda.
 | Usar tus API keys | El VPS no las necesita; el compose de producción las **vacía** aunque estén en `.env`, y el worker no arranca |
 | Descargar el PDF original | `EXPOSE_PDF=false`: el PDF **no se sube** al VPS, `/storage/pdfs/*` da 404 y la API no expone rutas internas |
 | Alterar las imágenes | El volumen se monta **solo lectura** en el backend; solo `import.sh` puede escribir en él |
-| Acceso directo a servicios | Solo **Caddy** (80/443) está expuesto. Backend, Postgres y Redis quedan en la red interna. `/docs` desactivado |
+| Acceso directo a servicios | Nada se publica a internet salvo a través de nginx: Caddy escucha en `127.0.0.1`, y backend, Postgres y Redis quedan en la red interna. `/docs` desactivado |
 | Tráfico sin cifrar | HTTPS automático con Let's Encrypt, HSTS y cabeceras de seguridad |
 
 ### Pasos
@@ -146,7 +146,15 @@ scp -r export usuario@IP-DEL-VPS:~/bancopreu/
 docker compose -f docker-compose.yml -f docker-compose.prod.yml build
 bash scripts/import.sh export
 ```
-Abre **https://isaacpreu.pulsarsrl.cloud**. El certificado HTTPS se genera solo la primera vez.
+**6. nginx del VPS** (si ya lo usas para otros sitios, como `pulsarsrl.cloud`): Caddy escucha solo en `127.0.0.1:8085` y nginx lo publica con HTTPS:
+```bash
+sudo grep -rln isaacpreu /etc/nginx/sites-enabled/ /etc/nginx/conf.d/   # si sale alguno, bórralo: causaría un bucle
+sudo cp deploy/nginx/isaacpreu.pulsarsrl.cloud.conf /etc/nginx/sites-available/
+sudo ln -sf /etc/nginx/sites-available/isaacpreu.pulsarsrl.cloud.conf /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d isaacpreu.pulsarsrl.cloud --redirect
+```
+Abre **https://isaacpreu.pulsarsrl.cloud**. Si el VPS no tiene nginx, mira las variables `CADDY_*` de `.env.production.example`: Caddy gestionará el HTTPS directamente.
 
 **Actualizar** después de cambiar código: `git pull` y luego `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build`.
 **Actualizar el banco:** reprocesa en local, vuelve a hacer `export.sh` + `scp` y ejecuta `import.sh` en el VPS.
